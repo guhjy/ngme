@@ -1,0 +1,246 @@
+---
+title: "ngme: an R package for non-Gaussian longitudinal data analysis"
+author: "Some lads"
+date: "`r Sys.Date()`"
+#output: rmarkdown::html_vignette
+output: pdf_document
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+# Modelling framework 
+
+The modelling frameworks that the package `ngme` 
+provides functions for have the following forms:
+$$
+\begin{aligned}
+Y_{ij} = {\bf x}_{ij}^{\top} {\bf \alpha} + {\bf d}_{ij}^{\top} {\bf U}_i + Z_{ij},
+\end{aligned}
+$$
+and
+$$
+\begin{aligned}
+Y_{ij} = {\bf x}_{ij}^{\top} {\bf \alpha} + {\bf d}_{ij}^{\top} {\bf U}_i + W_i(t_{ij}) + Z_{ij}.
+\end{aligned}
+$$
+Here, 
+
+- $i = 1, \ldots, m$ (subject index), $j = 1, \ldots, n_i$ (visit index), 
+- $Y_{ij}$ is the $j$th response for subject $i$ at time $t_{ij}$,
+- ${\bf x}_{ij}$ is the matrix of fixed effects explanatory variables,
+- ${\bf \alpha}$ is the matrix of fixed effects coefficients,
+- ${\bf d}_{ij}$ is the matrix of random effects explanatory variables,
+- ${\bf U}_i$ is the matrix of subject-specific and time-invariant random effects coefficients,
+- $W_i(t)$ is subject- and time-spceific random effect, specificed as a stochastic process,
+- $Z_{ij}$ is random error.
+
+The `ngme` package includes the function `ngme` for parameter estimation 
+based on maximum likelihood implemented with a computationally efficient 
+stochastic gradient algorithm. Predictions based on either nowcasting, 
+forecastin or 
+smoothing distributions could be obtained using the generic function `predict`. 
+`print`, `summary`, `plot`, `fitted`, `residuals`, `intervals` 
+functions are available as the supplementary. 
+ 
+Within `ngme` one can choose to specify the distributions as
+ 
+- Normal and Normal-inverse Gaussian (NIG) for ${\bf U}_i$,
+- Normal, NIG, generalised asymmetric Laplace (GAL) and Cauchy for $W_i(t)$,
+- Normal, NIG and t for $Z_{ij}$.
+
+Covariance structure of $W_i(t)$ could be specified through 
+integrated Random-Walk or Matern.
+
+# Data
+
+The data-set used to illustrate the usage of the package `ngme` comes 
+from a primary care cohort on kidney patients in the city of Salford 
+in Greater Manchester, United Kingdom. The data-set contains 392,870 
+repeated measurements in total that belong to 22,910 patients. It contains 
+the following variables:
+
+- id: identification number,
+- egfr: estimated glomerular filtration rate (eGFR) measurements; 
+        this variable is the longitudinal outcome,
+- sex: sex of a patient; 0 = male, 1 = female,
+- bage: baseline age of a patient (in years),
+- fu: follow-up time, $t_{ij}$, (in years), calculated as the difference 
+      between age at measurement and age at baseline,
+- pwl: a piecewise linear term at the age of 56.5, 
+       calculated as max(0, age - 56.5), 
+       where age denotes age at measurement. 
+
+For more details of the data-set, see 
+Digge, Sousa and Asar (2015, Biostatistics, 16(3), 522-536). 
+
+The code chunk given below shows how to load the data-set and 
+exemplifies the data-format by printing the first 10 rows. 
+
+```{r, echo=TRUE}
+suppressMessages(library(ngme))
+data(srft_data)
+knitr::kable(head(srft_data, 10))
+```
+
+# Analysis
+
+Here we use randomly selected 50 patients' data for the sake 
+of computational time. 
+
+```{r, echo=TRUE}
+set.seed(123)
+rs_id <- sample(unique(srft_data$id), 500, replace = F)
+srft_data_sub <- srft_data[srft_data$id %in% rs_id, ]
+```
+
+The below code chunk fits the following model:
+$$
+\log(eGFR)_{ij} = \beta_0 + \beta_1 bage_{i} + \beta_2 sex_i + 
+                 \beta_3 t_{ij} + \beta_4 \max(0, age_{ij} - 56.5) + 
+                 U_{0i} + W_i(t_{ij}) + Z_{ij},
+$$
+with 
+
+- Normally distributed $U_{0i}$,
+- Normally distributed $W_i(\cdot)$ with integrated Random Walk,
+- Normally distributed $Z_{ij}$.
+
+```{r, echo = TRUE}
+   set.seed(123)
+   srft_fit <- ngme(fixed = log(egfr) ~ sex + bage + fu + pwl,
+                    random = ~ 1|id,
+                    data = srft_data_sub,
+                    reffects = "Normal",
+                    process = c("Normal", "fd2"),
+                    error = "Normal",
+                    timeVar = "fu",
+                    nIter = 1000,
+                    use.process = TRUE,
+                    silent = TRUE,
+                    mesh = list(cutoff = 1/365,
+                                max.dist = 1/12,
+                                extend = 0.01
+                                ),
+                    controls = list(pSubsample = 0.5,
+                                    step0 = 1,
+                                    estimate.fisher = TRUE,
+                                    nSim.fisher = 10,
+                                    nIter.fisher = 10,
+                                    subsample.type = 1,
+                                    polyak.rate = 0.01,
+                                    alpha = 0.01
+                                    )
+                    )
+```
+
+`summary` function provides a more thorough list of results:
+
+```{r, echo = TRUE}
+summary(srft_fit)
+```
+
+Parameter trajectories within the stochastic gradient algorithm, 
+for example for the fixed effects, 
+can be visualised using the generic `plot` function as
+
+```{r, echo = T}
+plot(srft_fit, param = "fixed")
+```
+
+Marginal fitted values, $\hat{Y}_{ij} = {\bf x}_{ij} \hat{{\bf \beta}}$, 
+and marginal residuals, $Y_{ij} - \hat{Y}_{ij}$ can be obtained using 
+the `fitted` and `residual` functions, respectively:
+
+```{r, echo = TRUE}
+#just print the first 10 elements for each
+head(fitted(srft_fit), 10)
+head(residuals(srft_fit), 10)
+```
+
+95\% confidence intervals for the fixed effects coefficients 
+could be obtained using the `intervals` function:
+
+```{r, echo = TRUE}
+intervals(srft_fit)
+```
+
+On one-step forecasts could be obtained using the function 
+`predict`:
+
+```{r, echo = TRUE}
+pred <- predict(srft_fit, 
+                id = unique(srft_data_sub$id)[1], 
+                type = "Filter"
+                )
+
+```
+
+A summary of results including accuracy measures can be viewed by 
+calling the name of the predicted object. 
+Predictions for a selected subject, e.g. the first subject in the 
+`srft_data_sub`, could be plotted using
+
+```{r, echo = TRUE}
+ plot(pred, id = unique(srft_data_sub$id)[1], pch = 19, cex = 0.5)
+```
+
+In this plot, dots are observed data, black lines is the mean 
+of the predictive distribution, and red lines are the 95\% 
+prediction intervals. 
+
+Exceedence probabilities, for example losing kidney function 
+at least at a relative rate of 5\% in a year, 
+$P(\frac{\partial Y_{ik}^*}{\partial t} < -0.05|Y_{i1}, \ldots, Y_{ik})$,
+could be calculated using the nowcasting distributions. 
+The following script illustrates obtaining exceedence probabilities. 
+
+```{r, echo = TRUE}
+ excursion_ids <- unique(srft_data_sub$id)[1]
+
+ delta <- 0.01
+ 
+ Bf_pred <- Br_pred <- list()
+ 
+ for(i in 1:length(excursion_ids)){
+   
+   data_i <- srft_data[srft_data$id == excursion_ids[i], ]
+   
+   n_i <- nrow(data_i)
+   
+   Br_pred_i <- matrix(1, nrow = n_i, ncol = 1)
+
+   Bf_pred_i <- cbind(data_i$sex,
+                      data_i$bage,
+                      data_i$fu + 0.01, 
+                      pmax(0, data_i$bage + data_i$fu + 0.01 - 56.5)
+                      )
+   
+   Br_pred[[i]] <- Br_pred_i
+   Bf_pred[[i]] <- Bf_pred_i
+   
+ }
+ 
+ derivative_list <- list(Bfixed = Bf_pred,
+                         Brandom = Br_pred,
+                         delta = delta)
+ 
+ set.seed(123)
+ excursions_normal <- 
+   predict(srft_fit,
+           id = excursion_ids,
+           controls = list(nSim = 100,
+                           nBurnin = 100,
+                           predict.derivatives = derivative_list,
+                           excursions = list(list(type = '<', 
+                                                  level = -0.05, 
+                                                  process = 'Xderivative'))
+                           ),
+           type = "Nowcast"
+           )
+plot(excursions_normal, id = excursion_ids[1], plot_excursions = TRUE,
+     type = "o", pch = 19) 
+ 
+```
+ 
